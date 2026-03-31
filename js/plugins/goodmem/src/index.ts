@@ -1,0 +1,833 @@
+/**
+ * Copyright 2024 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { z, type Genkit } from 'genkit';
+import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
+import * as fs from 'fs';
+import * as path from 'path';
+
+// ---------------------------------------------------------------------------
+// Configuration types
+// ---------------------------------------------------------------------------
+
+export interface GoodMemPluginParams {
+  /** Base URL of the GoodMem API server (e.g., "https://api.goodmem.ai" or "http://localhost:8080"). */
+  baseUrl: string;
+  /** GoodMem API key for authentication (X-API-Key header). */
+  apiKey: string;
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+function normalizeBaseUrl(url: string): string {
+  return url.replace(/\/$/, '');
+}
+
+function apiHeaders(apiKey: string): Record<string, string> {
+  return {
+    'X-API-Key': apiKey,
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  };
+}
+
+async function apiFetch(
+  url: string,
+  apiKey: string,
+  init: RequestInit = {}
+): Promise<Response> {
+  const headers = {
+    ...apiHeaders(apiKey),
+    ...(init.headers as Record<string, string> | undefined),
+  };
+  // Allow self-signed certificates when using localhost/HTTPS in development
+  const fetchOptions: RequestInit = { ...init, headers };
+  return fetch(url, fetchOptions);
+}
+
+async function apiJson<T = any>(
+  url: string,
+  apiKey: string,
+  init: RequestInit = {}
+): Promise<T> {
+  const res = await apiFetch(url, apiKey, init);
+  if (!res.ok) {
+    let detail: string;
+    try {
+      const body = await res.json();
+      detail = body.message || body.error || JSON.stringify(body);
+    } catch {
+      detail = await res.text().catch(() => res.statusText);
+    }
+    throw new Error(
+      `GoodMem API error (${res.status}): ${detail}`
+    );
+  }
+  return (await res.json()) as T;
+}
+
+function getMimeType(ext: string): string | null {
+  const map: Record<string, string> = {
+    pdf: 'application/pdf',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    txt: 'text/plain',
+    html: 'text/html',
+    md: 'text/markdown',
+    csv: 'text/csv',
+    json: 'application/json',
+    xml: 'application/xml',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  };
+  return map[ext.toLowerCase().replace('.', '')] || null;
+}
+
+// ---------------------------------------------------------------------------
+// Exported helper functions (List Spaces, List Embedders — internal use)
+// ---------------------------------------------------------------------------
+
+/**
+ * List all spaces in the GoodMem instance.
+ * Used internally by the plugin tools and available for programmatic use.
+ */
+export async function listSpaces(params: GoodMemPluginParams) {
+  const baseUrl = normalizeBaseUrl(params.baseUrl);
+  const body = await apiJson(`${baseUrl}/v1/spaces`, params.apiKey);
+  const spaces = Array.isArray(body) ? body : body?.spaces || [];
+  return spaces;
+}
+
+/**
+ * List all embedders available in the GoodMem instance.
+ * Used internally by the plugin tools and available for programmatic use.
+ */
+export async function listEmbedders(params: GoodMemPluginParams) {
+  const baseUrl = normalizeBaseUrl(params.baseUrl);
+  const body = await apiJson(`${baseUrl}/v1/embedders`, params.apiKey);
+  const embedders = Array.isArray(body) ? body : body?.embedders || [];
+  return embedders;
+}
+
+// ---------------------------------------------------------------------------
+// Zod schemas for tool inputs and outputs
+// ---------------------------------------------------------------------------
+
+const CreateSpaceInputSchema = z.object({
+  name: z
+    .string()
+    .describe(
+      'A unique name for the space. If a space with this name already exists, its ID will be returned instead of creating a duplicate.'
+    ),
+  embedderId: z
+    .string()
+    .describe(
+      'The ID of the embedder model that converts text into vector representations for similarity search.'
+    ),
+  chunkSize: z
+    .number()
+    .optional()
+    .default(256)
+    .describe('Number of characters per chunk when splitting documents.'),
+  chunkOverlap: z
+    .number()
+    .optional()
+    .default(25)
+    .describe(
+      'Number of overlapping characters between consecutive chunks.'
+    ),
+  keepStrategy: z
+    .enum(['KEEP_END', 'KEEP_START', 'DISCARD'])
+    .optional()
+    .default('KEEP_END')
+    .describe('Where to attach the separator when splitting.'),
+  lengthMeasurement: z
+    .enum(['CHARACTER_COUNT', 'TOKEN_COUNT'])
+    .optional()
+    .default('CHARACTER_COUNT')
+    .describe('How chunk size is measured.'),
+});
+
+const CreateSpaceOutputSchema = z.object({
+  success: z.boolean(),
+  spaceId: z.string().optional(),
+  name: z.string().optional(),
+  embedderId: z.string().optional(),
+  message: z.string().optional(),
+  reused: z.boolean().optional(),
+  error: z.string().optional(),
+  details: z.any().optional(),
+});
+
+const CreateMemoryInputSchema = z.object({
+  spaceId: z.string().describe('The ID of the space to store the memory in.'),
+  filePath: z
+    .string()
+    .optional()
+    .describe(
+      'Absolute path to a file to store as memory (PDF, DOCX, image, etc.). Content type is auto-detected from the file extension.'
+    ),
+  textContent: z
+    .string()
+    .optional()
+    .describe(
+      'Plain text content to store as memory. If both filePath and textContent are provided, the file takes priority.'
+    ),
+  source: z
+    .string()
+    .optional()
+    .describe(
+      'Where this memory came from (e.g., "google-drive", "gmail"). Stored in metadata.source.'
+    ),
+  author: z
+    .string()
+    .optional()
+    .describe(
+      'The author or creator of the content. Stored in metadata.author.'
+    ),
+  tags: z
+    .string()
+    .optional()
+    .describe(
+      'Comma-separated tags for categorization (e.g., "legal,research,important"). Stored in metadata.tags as an array.'
+    ),
+  metadata: z
+    .record(z.any())
+    .optional()
+    .describe(
+      'Extra key-value metadata as JSON. Merged with source, author, and tags fields.'
+    ),
+});
+
+const CreateMemoryOutputSchema = z.object({
+  success: z.boolean(),
+  memoryId: z.string().optional(),
+  spaceId: z.string().optional(),
+  status: z.string().optional(),
+  contentType: z.string().optional(),
+  fileName: z.string().optional().nullable(),
+  message: z.string().optional(),
+  error: z.string().optional(),
+  details: z.any().optional(),
+});
+
+const RetrieveMemoriesInputSchema = z.object({
+  query: z
+    .string()
+    .describe(
+      'A natural language query used to find semantically similar memory chunks.'
+    ),
+  spaceIds: z
+    .array(z.string())
+    .describe('One or more space IDs to search across.'),
+  maxResults: z
+    .number()
+    .optional()
+    .default(5)
+    .describe('Limit the number of returned memories.'),
+  includeMemoryDefinition: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe(
+      'Fetch the full memory metadata alongside the matched chunks.'
+    ),
+  waitForIndexing: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe(
+      'Retry for up to 10 seconds when no results are found. Enable this when memories were just added and may still be processing.'
+    ),
+  rerankerId: z
+    .string()
+    .optional()
+    .describe('Optional reranker model ID to improve result ordering.'),
+  llmId: z
+    .string()
+    .optional()
+    .describe(
+      'Optional LLM ID to generate contextual responses alongside retrieved chunks.'
+    ),
+  relevanceThreshold: z
+    .number()
+    .optional()
+    .describe(
+      'Minimum score (0-1) for including results. Only used when rerankerId or llmId is set.'
+    ),
+  llmTemperature: z
+    .number()
+    .optional()
+    .describe(
+      'Creativity setting for LLM generation (0-2). Only used when llmId is set.'
+    ),
+  chronologicalResort: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      'Reorder results by creation time instead of relevance score.'
+    ),
+});
+
+const RetrieveMemoriesOutputSchema = z.object({
+  success: z.boolean(),
+  resultSetId: z.string().optional(),
+  results: z.array(z.any()).optional(),
+  memories: z.array(z.any()).optional(),
+  totalResults: z.number().optional(),
+  query: z.string().optional(),
+  abstractReply: z.any().optional(),
+  message: z.string().optional(),
+  error: z.string().optional(),
+  details: z.any().optional(),
+});
+
+const GetMemoryInputSchema = z.object({
+  memoryId: z
+    .string()
+    .describe('The UUID of the memory to fetch (returned by Create Memory).'),
+  includeContent: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe(
+      'Fetch the original document content of the memory in addition to its metadata.'
+    ),
+});
+
+const GetMemoryOutputSchema = z.object({
+  success: z.boolean(),
+  memory: z.any().optional(),
+  content: z.any().optional(),
+  contentError: z.string().optional(),
+  error: z.string().optional(),
+  details: z.any().optional(),
+});
+
+const DeleteMemoryInputSchema = z.object({
+  memoryId: z
+    .string()
+    .describe('The UUID of the memory to delete (returned by Create Memory).'),
+});
+
+const DeleteMemoryOutputSchema = z.object({
+  success: z.boolean(),
+  memoryId: z.string().optional(),
+  message: z.string().optional(),
+  error: z.string().optional(),
+  details: z.any().optional(),
+});
+
+// ---------------------------------------------------------------------------
+// Plugin definition
+// ---------------------------------------------------------------------------
+
+/**
+ * GoodMem plugin for Genkit.
+ *
+ * Registers GoodMem tools (createSpace, createMemory, retrieveMemories,
+ * getMemory, deleteMemory) that can be used with any Genkit agent or flow.
+ *
+ * @param params - GoodMem connection parameters (baseUrl, apiKey).
+ * @returns A GenkitPlugin that registers the GoodMem tools.
+ *
+ * @example
+ * ```ts
+ * import { genkit } from 'genkit';
+ * import { goodmem } from 'genkitx-goodmem';
+ *
+ * const ai = genkit({
+ *   plugins: [
+ *     goodmem({
+ *       baseUrl: 'http://localhost:8080',
+ *       apiKey: process.env.GOODMEM_API_KEY!,
+ *     }),
+ *   ],
+ * });
+ * ```
+ */
+export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
+  if (!params.baseUrl) {
+    throw new Error(
+      'GoodMem plugin requires a baseUrl. ' +
+        'Please provide the URL of your GoodMem API server.'
+    );
+  }
+  if (!params.apiKey) {
+    throw new Error(
+      'GoodMem plugin requires an apiKey. ' +
+        'Please pass in the API key or set the GOODMEM_API_KEY environment variable.'
+    );
+  }
+  return genkitPlugin('goodmem', async (ai: Genkit) => {
+    const baseUrl = normalizeBaseUrl(params.baseUrl);
+    const { apiKey } = params;
+
+    // ----- Create Space ----------------------------------------------------
+    ai.defineTool(
+      {
+        name: 'goodmem/createSpace',
+        description:
+          'Create a new GoodMem space or reuse an existing one. A space is a logical container for organizing related memories, configured with an embedder that converts text to vector embeddings.',
+        inputSchema: CreateSpaceInputSchema,
+        outputSchema: CreateSpaceOutputSchema,
+      },
+      async (input) => {
+        const {
+          name,
+          embedderId,
+          chunkSize,
+          chunkOverlap,
+          keepStrategy,
+          lengthMeasurement,
+        } = input;
+
+        // Check if a space with the same name already exists
+        try {
+          const spaces = await listSpaces(params);
+          const existing = spaces.find((s: any) => s.name === name);
+          if (existing) {
+            return {
+              success: true,
+              spaceId: existing.spaceId,
+              name: existing.name,
+              embedderId,
+              message: 'Space already exists, reusing existing space',
+              reused: true,
+            };
+          }
+        } catch {
+          // If listing fails, proceed to create
+        }
+
+        const requestBody: any = {
+          name,
+          spaceEmbedders: [{ embedderId, defaultRetrievalWeight: 1.0 }],
+          defaultChunkingConfig: {
+            recursive: {
+              chunkSize: chunkSize ?? 256,
+              chunkOverlap: chunkOverlap ?? 25,
+              separators: ['\n\n', '\n', '. ', ' ', ''],
+              keepStrategy: keepStrategy ?? 'KEEP_END',
+              separatorIsRegex: false,
+              lengthMeasurement: lengthMeasurement ?? 'CHARACTER_COUNT',
+            },
+          },
+        };
+
+        try {
+          const response = await apiJson(
+            `${baseUrl}/v1/spaces`,
+            apiKey,
+            { method: 'POST', body: JSON.stringify(requestBody) }
+          );
+          return {
+            success: true,
+            spaceId: response.spaceId,
+            name: response.name,
+            embedderId,
+            message: 'Space created successfully',
+            reused: false,
+          };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message || 'Failed to create space',
+            details: error.response?.body || String(error),
+          };
+        }
+      }
+    );
+
+    // ----- Create Memory ---------------------------------------------------
+    ai.defineTool(
+      {
+        name: 'goodmem/createMemory',
+        description:
+          'Store a document as a new memory in a GoodMem space. The memory is processed asynchronously — chunked into searchable pieces and embedded into vectors. Accepts a file path or plain text.',
+        inputSchema: CreateMemoryInputSchema,
+        outputSchema: CreateMemoryOutputSchema,
+      },
+      async (input) => {
+        const {
+          spaceId,
+          filePath,
+          textContent,
+          source,
+          author,
+          tags,
+          metadata,
+        } = input;
+
+        const requestBody: any = { spaceId };
+        let fileName: string | null = null;
+
+        if (filePath) {
+          // Read the file from disk and encode as base64
+          if (!fs.existsSync(filePath)) {
+            return {
+              success: false,
+              error: `File not found: ${filePath}`,
+            };
+          }
+          const fileBuffer = fs.readFileSync(filePath);
+          const base64 = fileBuffer.toString('base64');
+          const ext = path.extname(filePath).replace('.', '');
+          const detectedMime = getMimeType(ext);
+          const mimeType = detectedMime || 'application/octet-stream';
+          fileName = path.basename(filePath);
+
+          if (mimeType.startsWith('text/')) {
+            requestBody.contentType = mimeType;
+            requestBody.originalContent = fileBuffer.toString('utf-8');
+          } else {
+            requestBody.contentType = mimeType;
+            requestBody.originalContentB64 = base64;
+          }
+        } else if (textContent) {
+          requestBody.contentType = 'text/plain';
+          requestBody.originalContent = textContent;
+        } else {
+          return {
+            success: false,
+            error:
+              'No content provided. Please provide a filePath or textContent.',
+          };
+        }
+
+        // Merge metadata
+        const mergedMetadata: Record<string, any> = {};
+        if (metadata && typeof metadata === 'object') {
+          Object.assign(mergedMetadata, metadata);
+        }
+        if (source) mergedMetadata.source = source;
+        if (author) mergedMetadata.author = author;
+        if (tags) {
+          mergedMetadata.tags = tags
+            .split(',')
+            .map((t: string) => t.trim())
+            .filter((t: string) => t.length > 0);
+        }
+        if (Object.keys(mergedMetadata).length > 0) {
+          requestBody.metadata = mergedMetadata;
+        }
+
+        try {
+          const response = await apiJson(
+            `${baseUrl}/v1/memories`,
+            apiKey,
+            { method: 'POST', body: JSON.stringify(requestBody) }
+          );
+          return {
+            success: true,
+            memoryId: response.memoryId,
+            spaceId: response.spaceId,
+            status: response.processingStatus || 'PENDING',
+            contentType: requestBody.contentType,
+            fileName,
+            message: 'Memory created successfully',
+          };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message || 'Failed to create memory',
+            details: error.response?.body || String(error),
+          };
+        }
+      }
+    );
+
+    // ----- Retrieve Memories -----------------------------------------------
+    ai.defineTool(
+      {
+        name: 'goodmem/retrieveMemories',
+        description:
+          'Perform similarity-based semantic retrieval across one or more GoodMem spaces. Returns matching chunks ranked by relevance, with optional full memory definitions.',
+        inputSchema: RetrieveMemoriesInputSchema,
+        outputSchema: RetrieveMemoriesOutputSchema,
+      },
+      async (input) => {
+        const {
+          query,
+          spaceIds,
+          maxResults,
+          includeMemoryDefinition,
+          waitForIndexing,
+          rerankerId,
+          llmId,
+          relevanceThreshold,
+          llmTemperature,
+          chronologicalResort,
+        } = input;
+
+        const spaceKeys = spaceIds
+          .filter((id: string) => id && id.length > 0)
+          .map((spaceId: string) => ({ spaceId }));
+
+        if (spaceKeys.length === 0) {
+          return {
+            success: false,
+            error: 'At least one space must be selected.',
+          };
+        }
+
+        const requestBody: any = {
+          message: query,
+          spaceKeys,
+          requestedSize: maxResults ?? 5,
+          fetchMemory: includeMemoryDefinition !== false,
+        };
+
+        // Post-processor config (reranker / LLM)
+        if (rerankerId || llmId) {
+          const config: any = {};
+          if (rerankerId) config.reranker_id = rerankerId;
+          if (llmId) config.llm_id = llmId;
+          if (
+            relevanceThreshold !== undefined &&
+            relevanceThreshold !== null
+          )
+            config.relevance_threshold = relevanceThreshold;
+          if (llmTemperature !== undefined && llmTemperature !== null)
+            config.llm_temp = llmTemperature;
+          if (maxResults !== undefined && maxResults !== null)
+            config.max_results = maxResults;
+          if (chronologicalResort === true)
+            config.chronological_resort = true;
+
+          requestBody.postProcessor = {
+            name: 'com.goodmem.retrieval.postprocess.ChatPostProcessorFactory',
+            config,
+          };
+        }
+
+        const maxWaitMs = 10_000;
+        const pollIntervalMs = 2_000;
+        const shouldWait = waitForIndexing !== false;
+        const startTime = Date.now();
+        let lastResult: any = null;
+
+        try {
+          do {
+            const res = await apiFetch(
+              `${baseUrl}/v1/memories:retrieve`,
+              apiKey,
+              {
+                method: 'POST',
+                headers: { Accept: 'application/x-ndjson' },
+                body: JSON.stringify(requestBody),
+              }
+            );
+
+            if (!res.ok) {
+              let detail: string;
+              try {
+                const errBody = await res.json();
+                detail =
+                  errBody.message || errBody.error || JSON.stringify(errBody);
+              } catch {
+                detail = await res.text().catch(() => res.statusText);
+              }
+              throw new Error(
+                `GoodMem API error (${res.status}): ${detail}`
+              );
+            }
+
+            const responseText = await res.text();
+            const results: any[] = [];
+            const memories: any[] = [];
+            let resultSetId = '';
+            let abstractReply: any = null;
+
+            const lines = responseText.trim().split('\n');
+            for (const line of lines) {
+              let jsonStr = line.trim();
+              if (!jsonStr) continue;
+              if (jsonStr.startsWith('data:')) {
+                jsonStr = jsonStr.substring(5).trim();
+              }
+              if (jsonStr.startsWith('event:') || jsonStr === '') continue;
+
+              try {
+                const item = JSON.parse(jsonStr);
+
+                if (item.resultSetBoundary) {
+                  resultSetId = item.resultSetBoundary.resultSetId;
+                } else if (item.memoryDefinition) {
+                  memories.push(item.memoryDefinition);
+                } else if (item.abstractReply) {
+                  abstractReply = item.abstractReply;
+                } else if (item.retrievedItem) {
+                  results.push({
+                    chunkId:
+                      item.retrievedItem.chunk?.chunk?.chunkId,
+                    chunkText:
+                      item.retrievedItem.chunk?.chunk?.chunkText,
+                    memoryId:
+                      item.retrievedItem.chunk?.chunk?.memoryId,
+                    relevanceScore:
+                      item.retrievedItem.chunk?.relevanceScore,
+                    memoryIndex:
+                      item.retrievedItem.chunk?.memoryIndex,
+                  });
+                }
+              } catch {
+                // skip non-JSON lines
+              }
+            }
+
+            lastResult = {
+              success: true,
+              resultSetId,
+              results,
+              memories,
+              totalResults: results.length,
+              query,
+              ...(abstractReply ? { abstractReply } : {}),
+            };
+
+            if (results.length > 0 || !shouldWait) {
+              return lastResult;
+            }
+
+            const elapsed = Date.now() - startTime;
+            if (elapsed >= maxWaitMs) {
+              return {
+                ...lastResult,
+                message:
+                  'No results found after waiting for indexing. Memories may still be processing.',
+              };
+            }
+
+            await new Promise((resolve) =>
+              setTimeout(resolve, pollIntervalMs)
+            );
+          } while (true);
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message || 'Failed to retrieve memories',
+            details: error.response?.body || String(error),
+          };
+        }
+      }
+    );
+
+    // ----- Get Memory ------------------------------------------------------
+    ai.defineTool(
+      {
+        name: 'goodmem/getMemory',
+        description:
+          'Fetch a specific GoodMem memory record by its ID, including metadata, processing status, and optionally the original content.',
+        inputSchema: GetMemoryInputSchema,
+        outputSchema: GetMemoryOutputSchema,
+      },
+      async (input) => {
+        const { memoryId, includeContent } = input;
+
+        try {
+          const memory = await apiJson(
+            `${baseUrl}/v1/memories/${memoryId}`,
+            apiKey
+          );
+
+          const result: any = { success: true, memory };
+
+          if (includeContent) {
+            try {
+              const content = await apiJson(
+                `${baseUrl}/v1/memories/${memoryId}/content`,
+                apiKey
+              );
+              result.content = content;
+            } catch (contentError: any) {
+              result.contentError =
+                'Failed to fetch content: ' +
+                (contentError.message || 'Unknown error');
+            }
+          }
+
+          return result;
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message || 'Failed to get memory',
+            details: error.response?.body || String(error),
+          };
+        }
+      }
+    );
+
+    // ----- Delete Memory ---------------------------------------------------
+    ai.defineTool(
+      {
+        name: 'goodmem/deleteMemory',
+        description:
+          'Permanently delete a GoodMem memory and its associated chunks and vector embeddings.',
+        inputSchema: DeleteMemoryInputSchema,
+        outputSchema: DeleteMemoryOutputSchema,
+      },
+      async (input) => {
+        const { memoryId } = input;
+
+        try {
+          const res = await apiFetch(
+            `${baseUrl}/v1/memories/${memoryId}`,
+            apiKey,
+            { method: 'DELETE' }
+          );
+          if (!res.ok) {
+            let detail: string;
+            try {
+              const errBody = await res.json();
+              detail =
+                errBody.message || errBody.error || JSON.stringify(errBody);
+            } catch {
+              detail = await res.text().catch(() => res.statusText);
+            }
+            throw new Error(
+              `GoodMem API error (${res.status}): ${detail}`
+            );
+          }
+
+          return {
+            success: true,
+            memoryId,
+            message: 'Memory deleted successfully',
+          };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message || 'Failed to delete memory',
+            details: error.response?.body || String(error),
+          };
+        }
+      }
+    );
+  });
+}
+
+export default goodmem;
