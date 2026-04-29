@@ -133,11 +133,17 @@ describe('GoodMem Plugin', () => {
       await new Promise((r) => setTimeout(r, 200));
 
       const toolNames = [
-        'goodmem/createSpace',
-        'goodmem/createMemory',
-        'goodmem/retrieveMemories',
-        'goodmem/getMemory',
-        'goodmem/deleteMemory',
+        'goodmem/list_embedders',
+        'goodmem/list_spaces',
+        'goodmem/get_space',
+        'goodmem/create_space',
+        'goodmem/update_space',
+        'goodmem/delete_space',
+        'goodmem/create_memory',
+        'goodmem/list_memories',
+        'goodmem/retrieve_memories',
+        'goodmem/get_memory',
+        'goodmem/delete_memory',
       ];
 
       for (const name of toolNames) {
@@ -217,7 +223,7 @@ describe('GoodMem Plugin', () => {
 
   // ---- createSpace tool ----
 
-  describe('goodmem/createSpace', () => {
+  describe('goodmem/create_space', () => {
     it('should create a new space', async () => {
       let callCount = 0;
       globalThis.fetch = async (url: any) => {
@@ -244,7 +250,7 @@ describe('GoodMem Plugin', () => {
       });
       await new Promise((r) => setTimeout(r, 200));
 
-      const result = await callTool(ai, 'goodmem/createSpace', {
+      const result = await callTool(ai, 'goodmem/create_space', {
         name: 'test-space',
         embedderId: 'emb-1',
         chunkSize: 256,
@@ -274,7 +280,7 @@ describe('GoodMem Plugin', () => {
       });
       await new Promise((r) => setTimeout(r, 200));
 
-      const result = await callTool(ai, 'goodmem/createSpace', {
+      const result = await callTool(ai, 'goodmem/create_space', {
         name: 'test-space',
         embedderId: 'emb-1',
       });
@@ -306,7 +312,7 @@ describe('GoodMem Plugin', () => {
       });
       await new Promise((r) => setTimeout(r, 200));
 
-      const result = await callTool(ai, 'goodmem/createSpace', {
+      const result = await callTool(ai, 'goodmem/create_space', {
         name: 'test-space',
         embedderId: 'invalid-emb',
       });
@@ -318,7 +324,7 @@ describe('GoodMem Plugin', () => {
 
   // ---- createMemory tool ----
 
-  describe('goodmem/createMemory', () => {
+  describe('goodmem/create_memory', () => {
     it('should create a memory from text content', async () => {
       globalThis.fetch = async (url: any) => {
         const urlStr = typeof url === 'string' ? url : url.toString();
@@ -342,7 +348,7 @@ describe('GoodMem Plugin', () => {
       });
       await new Promise((r) => setTimeout(r, 200));
 
-      const result = await callTool(ai, 'goodmem/createMemory', {
+      const result = await callTool(ai, 'goodmem/create_memory', {
         spaceId: 'sp-1',
         textContent: 'The capital of France is Paris.',
         source: 'test',
@@ -368,7 +374,7 @@ describe('GoodMem Plugin', () => {
       });
       await new Promise((r) => setTimeout(r, 200));
 
-      const result = await callTool(ai, 'goodmem/createMemory', {
+      const result = await callTool(ai, 'goodmem/create_memory', {
         spaceId: 'sp-1',
       });
 
@@ -393,7 +399,7 @@ describe('GoodMem Plugin', () => {
       });
       await new Promise((r) => setTimeout(r, 200));
 
-      const result = await callTool(ai, 'goodmem/createMemory', {
+      const result = await callTool(ai, 'goodmem/create_memory', {
         spaceId: 'sp-1',
         filePath: '/nonexistent/file.pdf',
       });
@@ -417,7 +423,7 @@ describe('GoodMem Plugin', () => {
       });
       await new Promise((r) => setTimeout(r, 200));
 
-      const result = await callTool(ai, 'goodmem/createMemory', {
+      const result = await callTool(ai, 'goodmem/create_memory', {
         spaceId: 'sp-1',
         textContent: 'some text',
       });
@@ -429,7 +435,7 @@ describe('GoodMem Plugin', () => {
 
   // ---- retrieveMemories tool ----
 
-  describe('goodmem/retrieveMemories', () => {
+  describe('goodmem/retrieve_memories', () => {
     it('should retrieve memories with NDJSON response', async () => {
       const ndjsonLines = [
         {
@@ -468,7 +474,7 @@ describe('GoodMem Plugin', () => {
       });
       await new Promise((r) => setTimeout(r, 200));
 
-      const result = await callTool(ai, 'goodmem/retrieveMemories', {
+      const result = await callTool(ai, 'goodmem/retrieve_memories', {
         query: 'What is the capital of France?',
         spaceIds: ['sp-1'],
         maxResults: 5,
@@ -496,7 +502,7 @@ describe('GoodMem Plugin', () => {
       });
       await new Promise((r) => setTimeout(r, 200));
 
-      const result = await callTool(ai, 'goodmem/retrieveMemories', {
+      const result = await callTool(ai, 'goodmem/retrieve_memories', {
         query: 'test',
         spaceIds: [],
         waitForIndexing: false,
@@ -520,7 +526,7 @@ describe('GoodMem Plugin', () => {
       });
       await new Promise((r) => setTimeout(r, 200));
 
-      const result = await callTool(ai, 'goodmem/retrieveMemories', {
+      const result = await callTool(ai, 'goodmem/retrieve_memories', {
         query: 'test',
         spaceIds: ['sp-1'],
         waitForIndexing: false,
@@ -567,7 +573,7 @@ describe('GoodMem Plugin', () => {
       });
       await new Promise((r) => setTimeout(r, 200));
 
-      const result = await callTool(ai, 'goodmem/retrieveMemories', {
+      const result = await callTool(ai, 'goodmem/retrieve_memories', {
         query: 'test query',
         spaceIds: ['sp-1'],
         waitForIndexing: false,
@@ -584,7 +590,7 @@ describe('GoodMem Plugin', () => {
 
   // ---- getMemory tool ----
 
-  describe('goodmem/getMemory', () => {
+  describe('goodmem/get_memory', () => {
     it('should get a memory by ID', async () => {
       let callCount = 0;
       globalThis.fetch = async (url: any) => {
@@ -613,7 +619,7 @@ describe('GoodMem Plugin', () => {
       });
       await new Promise((r) => setTimeout(r, 200));
 
-      const result = await callTool(ai, 'goodmem/getMemory', {
+      const result = await callTool(ai, 'goodmem/get_memory', {
         memoryId: 'mem-123',
         includeContent: true,
       });
@@ -648,7 +654,7 @@ describe('GoodMem Plugin', () => {
       });
       await new Promise((r) => setTimeout(r, 200));
 
-      const result = await callTool(ai, 'goodmem/getMemory', {
+      const result = await callTool(ai, 'goodmem/get_memory', {
         memoryId: 'mem-123',
         includeContent: true,
       });
@@ -672,7 +678,7 @@ describe('GoodMem Plugin', () => {
       });
       await new Promise((r) => setTimeout(r, 200));
 
-      const result = await callTool(ai, 'goodmem/getMemory', {
+      const result = await callTool(ai, 'goodmem/get_memory', {
         memoryId: '00000000-0000-0000-0000-000000000000',
       });
 
@@ -683,7 +689,7 @@ describe('GoodMem Plugin', () => {
 
   // ---- deleteMemory tool ----
 
-  describe('goodmem/deleteMemory', () => {
+  describe('goodmem/delete_memory', () => {
     it('should delete a memory successfully', async () => {
       globalThis.fetch = async () => mockResponse({});
 
@@ -697,7 +703,7 @@ describe('GoodMem Plugin', () => {
       });
       await new Promise((r) => setTimeout(r, 200));
 
-      const result = await callTool(ai, 'goodmem/deleteMemory', {
+      const result = await callTool(ai, 'goodmem/delete_memory', {
         memoryId: 'mem-123',
       });
 
@@ -719,7 +725,7 @@ describe('GoodMem Plugin', () => {
       });
       await new Promise((r) => setTimeout(r, 200));
 
-      const result = await callTool(ai, 'goodmem/deleteMemory', {
+      const result = await callTool(ai, 'goodmem/delete_memory', {
         memoryId: '00000000-0000-0000-0000-000000000000',
       });
 

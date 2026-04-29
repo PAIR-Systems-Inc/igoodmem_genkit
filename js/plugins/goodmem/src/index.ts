@@ -55,9 +55,7 @@ async function apiFetch(
     ...apiHeaders(apiKey),
     ...(init.headers as Record<string, string> | undefined),
   };
-  // Allow self-signed certificates when using localhost/HTTPS in development
-  const fetchOptions: RequestInit = { ...init, headers };
-  return fetch(url, fetchOptions);
+  return fetch(url, { ...init, headers });
 }
 
 async function apiJson<T = any>(
@@ -74,9 +72,7 @@ async function apiJson<T = any>(
     } catch {
       detail = await res.text().catch(() => res.statusText);
     }
-    throw new Error(
-      `GoodMem API error (${res.status}): ${detail}`
-    );
+    throw new Error(`GoodMem API error (${res.status}): ${detail}`);
   }
   return (await res.json()) as T;
 }
@@ -106,12 +102,12 @@ function getMimeType(ext: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Exported helper functions (List Spaces, List Embedders — internal use)
+// Exported helper functions (also wrapped as tools below)
 // ---------------------------------------------------------------------------
 
 /**
  * List all spaces in the GoodMem instance.
- * Used internally by the plugin tools and available for programmatic use.
+ * Available for programmatic use (also exposed as the `goodmem/list_spaces` tool).
  */
 export async function listSpaces(params: GoodMemPluginParams) {
   const baseUrl = normalizeBaseUrl(params.baseUrl);
@@ -122,7 +118,7 @@ export async function listSpaces(params: GoodMemPluginParams) {
 
 /**
  * List all embedders available in the GoodMem instance.
- * Used internally by the plugin tools and available for programmatic use.
+ * Available for programmatic use (also exposed as the `goodmem/list_embedders` tool).
  */
 export async function listEmbedders(params: GoodMemPluginParams) {
   const baseUrl = normalizeBaseUrl(params.baseUrl);
@@ -132,8 +128,37 @@ export async function listEmbedders(params: GoodMemPluginParams) {
 }
 
 // ---------------------------------------------------------------------------
-// Zod schemas for tool inputs and outputs
+// Zod schemas — Spaces
 // ---------------------------------------------------------------------------
+
+const ListEmbeddersInputSchema = z.object({}).optional();
+const ListEmbeddersOutputSchema = z.object({
+  success: z.boolean(),
+  embedders: z.array(z.any()).optional(),
+  totalResults: z.number().optional(),
+  error: z.string().optional(),
+  details: z.any().optional(),
+});
+
+const ListSpacesInputSchema = z.object({}).optional();
+const ListSpacesOutputSchema = z.object({
+  success: z.boolean(),
+  spaces: z.array(z.any()).optional(),
+  totalResults: z.number().optional(),
+  error: z.string().optional(),
+  details: z.any().optional(),
+});
+
+const GetSpaceInputSchema = z.object({
+  spaceId: z.string().describe('The UUID of the space to fetch.'),
+});
+
+const GetSpaceOutputSchema = z.object({
+  success: z.boolean(),
+  space: z.any().optional(),
+  error: z.string().optional(),
+  details: z.any().optional(),
+});
 
 const CreateSpaceInputSchema = z.object({
   name: z
@@ -155,9 +180,7 @@ const CreateSpaceInputSchema = z.object({
     .number()
     .optional()
     .default(25)
-    .describe(
-      'Number of overlapping characters between consecutive chunks.'
-    ),
+    .describe('Number of overlapping characters between consecutive chunks.'),
   keepStrategy: z
     .enum(['KEEP_END', 'KEEP_START', 'DISCARD'])
     .optional()
@@ -168,6 +191,10 @@ const CreateSpaceInputSchema = z.object({
     .optional()
     .default('CHARACTER_COUNT')
     .describe('How chunk size is measured.'),
+  labels: z
+    .record(z.string())
+    .optional()
+    .describe('Optional key-value labels attached to the space at creation time.'),
 });
 
 const CreateSpaceOutputSchema = z.object({
@@ -180,6 +207,59 @@ const CreateSpaceOutputSchema = z.object({
   error: z.string().optional(),
   details: z.any().optional(),
 });
+
+const UpdateSpaceInputSchema = z.object({
+  spaceId: z.string().describe('The UUID of the space to update.'),
+  name: z
+    .string()
+    .optional()
+    .describe('New name for the space.'),
+  publicRead: z
+    .boolean()
+    .optional()
+    .describe('Whether the space is publicly readable.'),
+  replaceLabels: z
+    .record(z.string())
+    .optional()
+    .describe(
+      'Replace ALL existing labels with this map. Mutually exclusive with mergeLabels.'
+    ),
+  mergeLabels: z
+    .record(z.string())
+    .optional()
+    .describe(
+      'Merge these labels into existing labels (adds/overwrites individual keys).'
+    ),
+  defaultChunkingConfig: z
+    .any()
+    .optional()
+    .describe(
+      'Optional new chunking config. Pass the full GoodMem chunking config object (e.g., {recursive: {...}}).'
+    ),
+});
+
+const UpdateSpaceOutputSchema = z.object({
+  success: z.boolean(),
+  space: z.any().optional(),
+  error: z.string().optional(),
+  details: z.any().optional(),
+});
+
+const DeleteSpaceInputSchema = z.object({
+  spaceId: z.string().describe('The UUID of the space to delete.'),
+});
+
+const DeleteSpaceOutputSchema = z.object({
+  success: z.boolean(),
+  spaceId: z.string().optional(),
+  message: z.string().optional(),
+  error: z.string().optional(),
+  details: z.any().optional(),
+});
+
+// ---------------------------------------------------------------------------
+// Zod schemas — Memories
+// ---------------------------------------------------------------------------
 
 const CreateMemoryInputSchema = z.object({
   spaceId: z.string().describe('The ID of the space to store the memory in.'),
@@ -204,9 +284,7 @@ const CreateMemoryInputSchema = z.object({
   author: z
     .string()
     .optional()
-    .describe(
-      'The author or creator of the content. Stored in metadata.author.'
-    ),
+    .describe('The author or creator of the content. Stored in metadata.author.'),
   tags: z
     .string()
     .optional()
@@ -233,6 +311,23 @@ const CreateMemoryOutputSchema = z.object({
   details: z.any().optional(),
 });
 
+const ListMemoriesInputSchema = z.object({
+  spaceId: z
+    .string()
+    .describe(
+      'The UUID of the space whose memories you want to list. (GoodMem requires a space scope to list memories.)'
+    ),
+});
+
+const ListMemoriesOutputSchema = z.object({
+  success: z.boolean(),
+  memories: z.array(z.any()).optional(),
+  totalResults: z.number().optional(),
+  spaceId: z.string().optional(),
+  error: z.string().optional(),
+  details: z.any().optional(),
+});
+
 const RetrieveMemoriesInputSchema = z.object({
   query: z
     .string()
@@ -251,9 +346,7 @@ const RetrieveMemoriesInputSchema = z.object({
     .boolean()
     .optional()
     .default(true)
-    .describe(
-      'Fetch the full memory metadata alongside the matched chunks.'
-    ),
+    .describe('Fetch the full memory metadata alongside the matched chunks.'),
   waitForIndexing: z
     .boolean()
     .optional()
@@ -264,12 +357,12 @@ const RetrieveMemoriesInputSchema = z.object({
   rerankerId: z
     .string()
     .optional()
-    .describe('Optional reranker model ID to improve result ordering.'),
+    .describe('Optional reranker model UUID to improve result ordering.'),
   llmId: z
     .string()
     .optional()
     .describe(
-      'Optional LLM ID to generate contextual responses alongside retrieved chunks.'
+      'Optional LLM UUID to generate contextual responses alongside retrieved chunks.'
     ),
   relevanceThreshold: z
     .number()
@@ -287,9 +380,7 @@ const RetrieveMemoriesInputSchema = z.object({
     .boolean()
     .optional()
     .default(false)
-    .describe(
-      'Reorder results by creation time instead of relevance score.'
-    ),
+    .describe('Reorder results by creation time instead of relevance score.'),
 });
 
 const RetrieveMemoriesOutputSchema = z.object({
@@ -348,8 +439,10 @@ const DeleteMemoryOutputSchema = z.object({
 /**
  * GoodMem plugin for Genkit.
  *
- * Registers GoodMem tools (createSpace, createMemory, retrieveMemories,
- * getMemory, deleteMemory) that can be used with any Genkit agent or flow.
+ * Registers 11 GoodMem tools that can be used with any Genkit agent or flow:
+ * list_embedders, list_spaces, get_space, create_space, update_space,
+ * delete_space, create_memory, list_memories, retrieve_memories, get_memory,
+ * delete_memory.
  *
  * @param params - GoodMem connection parameters (baseUrl, apiKey).
  * @returns A GenkitPlugin that registers the GoodMem tools.
@@ -386,12 +479,92 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
     const baseUrl = normalizeBaseUrl(params.baseUrl);
     const { apiKey } = params;
 
+    // ----- List Embedders --------------------------------------------------
+    ai.defineTool(
+      {
+        name: 'goodmem/list_embedders',
+        description:
+          'List all embedder models available in the GoodMem instance. Embedders convert text into vector representations and are referenced when creating spaces.',
+        inputSchema: ListEmbeddersInputSchema,
+        outputSchema: ListEmbeddersOutputSchema,
+      },
+      async () => {
+        try {
+          const embedders = await listEmbedders(params);
+          return {
+            success: true,
+            embedders,
+            totalResults: embedders.length,
+          };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message || 'Failed to list embedders',
+            details: error.response?.body || String(error),
+          };
+        }
+      }
+    );
+
+    // ----- List Spaces -----------------------------------------------------
+    ai.defineTool(
+      {
+        name: 'goodmem/list_spaces',
+        description:
+          'List all spaces visible to the API key. A space is a logical container for organizing related memories.',
+        inputSchema: ListSpacesInputSchema,
+        outputSchema: ListSpacesOutputSchema,
+      },
+      async () => {
+        try {
+          const spaces = await listSpaces(params);
+          return {
+            success: true,
+            spaces,
+            totalResults: spaces.length,
+          };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message || 'Failed to list spaces',
+            details: error.response?.body || String(error),
+          };
+        }
+      }
+    );
+
+    // ----- Get Space -------------------------------------------------------
+    ai.defineTool(
+      {
+        name: 'goodmem/get_space',
+        description: 'Fetch a specific GoodMem space by its UUID.',
+        inputSchema: GetSpaceInputSchema,
+        outputSchema: GetSpaceOutputSchema,
+      },
+      async (input) => {
+        const { spaceId } = input;
+        try {
+          const space = await apiJson(
+            `${baseUrl}/v1/spaces/${spaceId}`,
+            apiKey
+          );
+          return { success: true, space };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message || 'Failed to get space',
+            details: error.response?.body || String(error),
+          };
+        }
+      }
+    );
+
     // ----- Create Space ----------------------------------------------------
     ai.defineTool(
       {
-        name: 'goodmem/createSpace',
+        name: 'goodmem/create_space',
         description:
-          'Create a new GoodMem space or reuse an existing one. A space is a logical container for organizing related memories, configured with an embedder that converts text to vector embeddings.',
+          'Create a new GoodMem space or reuse an existing one with the same name. A space is a logical container for organizing related memories, configured with an embedder that converts text to vector embeddings.',
         inputSchema: CreateSpaceInputSchema,
         outputSchema: CreateSpaceOutputSchema,
       },
@@ -403,9 +576,10 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           chunkOverlap,
           keepStrategy,
           lengthMeasurement,
+          labels,
         } = input;
 
-        // Check if a space with the same name already exists
+        // Reuse-on-name: check if a space with this name already exists.
         try {
           const spaces = await listSpaces(params);
           const existing = spaces.find((s: any) => s.name === name);
@@ -420,7 +594,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
             };
           }
         } catch {
-          // If listing fails, proceed to create
+          // If listing fails, proceed to create.
         }
 
         const requestBody: any = {
@@ -437,13 +611,15 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
             },
           },
         };
+        if (labels && Object.keys(labels).length > 0) {
+          requestBody.labels = labels;
+        }
 
         try {
-          const response = await apiJson(
-            `${baseUrl}/v1/spaces`,
-            apiKey,
-            { method: 'POST', body: JSON.stringify(requestBody) }
-          );
+          const response = await apiJson(`${baseUrl}/v1/spaces`, apiKey, {
+            method: 'POST',
+            body: JSON.stringify(requestBody),
+          });
           return {
             success: true,
             spaceId: response.spaceId,
@@ -462,10 +638,114 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
       }
     );
 
+    // ----- Update Space ----------------------------------------------------
+    ai.defineTool(
+      {
+        name: 'goodmem/update_space',
+        description:
+          'Update a GoodMem space. Supports renaming, toggling publicRead, and modifying labels via replaceLabels (overwrite all) or mergeLabels (merge into existing).',
+        inputSchema: UpdateSpaceInputSchema,
+        outputSchema: UpdateSpaceOutputSchema,
+      },
+      async (input) => {
+        const {
+          spaceId,
+          name,
+          publicRead,
+          replaceLabels,
+          mergeLabels,
+          defaultChunkingConfig,
+        } = input;
+
+        if (replaceLabels && mergeLabels) {
+          return {
+            success: false,
+            error:
+              'replaceLabels and mergeLabels are mutually exclusive — pass only one.',
+          };
+        }
+
+        const requestBody: any = {};
+        if (name !== undefined) requestBody.name = name;
+        if (publicRead !== undefined) requestBody.publicRead = publicRead;
+        if (replaceLabels !== undefined)
+          requestBody.replaceLabels = replaceLabels;
+        if (mergeLabels !== undefined) requestBody.mergeLabels = mergeLabels;
+        if (defaultChunkingConfig !== undefined)
+          requestBody.defaultChunkingConfig = defaultChunkingConfig;
+
+        if (Object.keys(requestBody).length === 0) {
+          return {
+            success: false,
+            error:
+              'No fields provided to update. Pass at least one of: name, publicRead, replaceLabels, mergeLabels, defaultChunkingConfig.',
+          };
+        }
+
+        try {
+          const space = await apiJson(
+            `${baseUrl}/v1/spaces/${spaceId}`,
+            apiKey,
+            { method: 'PUT', body: JSON.stringify(requestBody) }
+          );
+          return { success: true, space };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message || 'Failed to update space',
+            details: error.response?.body || String(error),
+          };
+        }
+      }
+    );
+
+    // ----- Delete Space ----------------------------------------------------
+    ai.defineTool(
+      {
+        name: 'goodmem/delete_space',
+        description:
+          'Permanently delete a GoodMem space. All memories inside the space are deleted as well.',
+        inputSchema: DeleteSpaceInputSchema,
+        outputSchema: DeleteSpaceOutputSchema,
+      },
+      async (input) => {
+        const { spaceId } = input;
+        try {
+          const res = await apiFetch(
+            `${baseUrl}/v1/spaces/${spaceId}`,
+            apiKey,
+            { method: 'DELETE' }
+          );
+          if (!res.ok) {
+            let detail: string;
+            try {
+              const errBody = await res.json();
+              detail =
+                errBody.message || errBody.error || JSON.stringify(errBody);
+            } catch {
+              detail = await res.text().catch(() => res.statusText);
+            }
+            throw new Error(`GoodMem API error (${res.status}): ${detail}`);
+          }
+          return {
+            success: true,
+            spaceId,
+            message: 'Space deleted successfully',
+          };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message || 'Failed to delete space',
+            details: error.response?.body || String(error),
+          };
+        }
+      }
+    );
+
     // ----- Create Memory ---------------------------------------------------
     ai.defineTool(
       {
-        name: 'goodmem/createMemory',
+        name: 'goodmem/create_memory',
         description:
           'Store a document as a new memory in a GoodMem space. The memory is processed asynchronously — chunked into searchable pieces and embedded into vectors. Accepts a file path or plain text.',
         inputSchema: CreateMemoryInputSchema,
@@ -486,7 +766,6 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
         let fileName: string | null = null;
 
         if (filePath) {
-          // Read the file from disk and encode as base64
           if (!fs.existsSync(filePath)) {
             return {
               success: false,
@@ -518,7 +797,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           };
         }
 
-        // Merge metadata
+        // Merge metadata (matches Activepieces reference behavior).
         const mergedMetadata: Record<string, any> = {};
         if (metadata && typeof metadata === 'object') {
           Object.assign(mergedMetadata, metadata);
@@ -560,12 +839,47 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
       }
     );
 
+    // ----- List Memories ---------------------------------------------------
+    ai.defineTool(
+      {
+        name: 'goodmem/list_memories',
+        description:
+          'List the memories stored in a specific GoodMem space (GoodMem scopes memory listing to a single space).',
+        inputSchema: ListMemoriesInputSchema,
+        outputSchema: ListMemoriesOutputSchema,
+      },
+      async (input) => {
+        const { spaceId } = input;
+        try {
+          const body = await apiJson<any>(
+            `${baseUrl}/v1/spaces/${spaceId}/memories`,
+            apiKey
+          );
+          const memories = Array.isArray(body)
+            ? body
+            : body?.memories || [];
+          return {
+            success: true,
+            spaceId,
+            memories,
+            totalResults: memories.length,
+          };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message || 'Failed to list memories',
+            details: error.response?.body || String(error),
+          };
+        }
+      }
+    );
+
     // ----- Retrieve Memories -----------------------------------------------
     ai.defineTool(
       {
-        name: 'goodmem/retrieveMemories',
+        name: 'goodmem/retrieve_memories',
         description:
-          'Perform similarity-based semantic retrieval across one or more GoodMem spaces. Returns matching chunks ranked by relevance, with optional full memory definitions.',
+          'Perform similarity-based semantic retrieval across one or more GoodMem spaces. Returns matching chunks ranked by relevance, with optional reranking, LLM-generated abstract reply, relevance threshold, and chronological resorting.',
         inputSchema: RetrieveMemoriesInputSchema,
         outputSchema: RetrieveMemoriesOutputSchema,
       },
@@ -601,7 +915,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           fetchMemory: includeMemoryDefinition !== false,
         };
 
-        // Post-processor config (reranker / LLM)
+        // Post-processor config (reranker / LLM) — mirrors Activepieces reference.
         if (rerankerId || llmId) {
           const config: any = {};
           if (rerankerId) config.reranker_id = rerankerId;
@@ -615,8 +929,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
             config.llm_temp = llmTemperature;
           if (maxResults !== undefined && maxResults !== null)
             config.max_results = maxResults;
-          if (chronologicalResort === true)
-            config.chronological_resort = true;
+          if (chronologicalResort === true) config.chronological_resort = true;
 
           requestBody.postProcessor = {
             name: 'com.goodmem.retrieval.postprocess.ChatPostProcessorFactory',
@@ -651,9 +964,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
               } catch {
                 detail = await res.text().catch(() => res.statusText);
               }
-              throw new Error(
-                `GoodMem API error (${res.status}): ${detail}`
-              );
+              throw new Error(`GoodMem API error (${res.status}): ${detail}`);
             }
 
             const responseText = await res.text();
@@ -682,16 +993,11 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
                   abstractReply = item.abstractReply;
                 } else if (item.retrievedItem) {
                   results.push({
-                    chunkId:
-                      item.retrievedItem.chunk?.chunk?.chunkId,
-                    chunkText:
-                      item.retrievedItem.chunk?.chunk?.chunkText,
-                    memoryId:
-                      item.retrievedItem.chunk?.chunk?.memoryId,
-                    relevanceScore:
-                      item.retrievedItem.chunk?.relevanceScore,
-                    memoryIndex:
-                      item.retrievedItem.chunk?.memoryIndex,
+                    chunkId: item.retrievedItem.chunk?.chunk?.chunkId,
+                    chunkText: item.retrievedItem.chunk?.chunk?.chunkText,
+                    memoryId: item.retrievedItem.chunk?.chunk?.memoryId,
+                    relevanceScore: item.retrievedItem.chunk?.relevanceScore,
+                    memoryIndex: item.retrievedItem.chunk?.memoryIndex,
                   });
                 }
               } catch {
@@ -739,7 +1045,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
     // ----- Get Memory ------------------------------------------------------
     ai.defineTool(
       {
-        name: 'goodmem/getMemory',
+        name: 'goodmem/get_memory',
         description:
           'Fetch a specific GoodMem memory record by its ID, including metadata, processing status, and optionally the original content.',
         inputSchema: GetMemoryInputSchema,
@@ -747,7 +1053,6 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
       },
       async (input) => {
         const { memoryId, includeContent } = input;
-
         try {
           const memory = await apiJson(
             `${baseUrl}/v1/memories/${memoryId}`,
@@ -784,7 +1089,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
     // ----- Delete Memory ---------------------------------------------------
     ai.defineTool(
       {
-        name: 'goodmem/deleteMemory',
+        name: 'goodmem/delete_memory',
         description:
           'Permanently delete a GoodMem memory and its associated chunks and vector embeddings.',
         inputSchema: DeleteMemoryInputSchema,
@@ -792,7 +1097,6 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
       },
       async (input) => {
         const { memoryId } = input;
-
         try {
           const res = await apiFetch(
             `${baseUrl}/v1/memories/${memoryId}`,
@@ -808,9 +1112,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
             } catch {
               detail = await res.text().catch(() => res.statusText);
             }
-            throw new Error(
-              `GoodMem API error (${res.status}): ${detail}`
-            );
+            throw new Error(`GoodMem API error (${res.status}): ${detail}`);
           }
 
           return {
