@@ -318,6 +318,25 @@ const ListMemoriesInputSchema = z.object({
     .describe(
       'The UUID of the space whose memories you want to list. (GoodMem requires a space scope to list memories.)'
     ),
+  statusFilter: z
+    .enum(['PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'])
+    .optional()
+    .describe('Restrict results to memories in this processing status.'),
+  includeContent: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      'When true, each returned memory includes its original document content alongside the metadata.'
+    ),
+  sortBy: z
+    .enum(['created_at', 'updated_at'])
+    .optional()
+    .describe('Field used to sort the returned memories.'),
+  sortOrder: z
+    .enum(['ASCENDING', 'DESCENDING'])
+    .optional()
+    .describe('Sort direction applied to sortBy.'),
 });
 
 const ListMemoriesOutputSchema = z.object({
@@ -353,7 +372,21 @@ const RetrieveMemoriesInputSchema = z.object({
     .optional()
     .default(true)
     .describe(
-      'Retry for up to 10 seconds when no results are found. Enable this when memories were just added and may still be processing.'
+      'Retry up to maxWaitSeconds when no results are found. Enable this when memories were just added and may still be processing.'
+    ),
+  maxWaitSeconds: z
+    .number()
+    .optional()
+    .default(10)
+    .describe(
+      'Maximum time in seconds to keep polling for results when waitForIndexing is true.'
+    ),
+  pollInterval: z
+    .number()
+    .optional()
+    .default(2)
+    .describe(
+      'Seconds to wait between polling attempts when waitForIndexing is true.'
     ),
   rerankerId: z
     .string()
@@ -382,6 +415,12 @@ const RetrieveMemoriesInputSchema = z.object({
     .optional()
     .default(false)
     .describe('Reorder results by creation time instead of relevance score.'),
+  metadataFilter: z
+    .string()
+    .optional()
+    .describe(
+      "Server-side filter applied to every space in spaceIds. Accepts a SQL-style JSONPath expression, for example \"CAST(val('$.category') AS TEXT) = 'feat'\" to return only memories whose metadata.category equals 'feat'."
+    ),
 });
 
 const RetrieveMemoriesOutputSchema = z.object({
@@ -849,12 +888,19 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
         outputSchema: ListMemoriesOutputSchema,
       },
       async (input) => {
-        const { spaceId } = input;
+        const { spaceId, statusFilter, includeContent, sortBy, sortOrder } =
+          input;
+        const params = new URLSearchParams();
+        if (includeContent) params.set('includeContent', 'true');
+        if (statusFilter) params.set('statusFilter', statusFilter);
+        if (sortBy) params.set('sortBy', sortBy);
+        if (sortOrder) params.set('sortOrder', sortOrder);
+        const query = params.toString();
+        const url = `${baseUrl}/v1/spaces/${spaceId}/memories${
+          query ? `?${query}` : ''
+        }`;
         try {
-          const body = await apiJson<any>(
-            `${baseUrl}/v1/spaces/${spaceId}/memories`,
-            apiKey
-          );
+          const body = await apiJson<any>(url, apiKey);
           const memories = Array.isArray(body) ? body : body?.memories || [];
           return {
             success: true,
@@ -888,16 +934,25 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           maxResults,
           includeMemoryDefinition,
           waitForIndexing,
+          maxWaitSeconds,
+          pollInterval,
           rerankerId,
           llmId,
           relevanceThreshold,
           llmTemperature,
           chronologicalResort,
+          metadataFilter,
         } = input;
 
         const spaceKeys = spaceIds
           .filter((id: string) => id && id.length > 0)
-          .map((spaceId: string) => ({ spaceId }));
+          .map((spaceId: string) => {
+            const key: { spaceId: string; filter?: string } = { spaceId };
+            if (metadataFilter && metadataFilter.length > 0) {
+              key.filter = metadataFilter;
+            }
+            return key;
+          });
 
         if (spaceKeys.length === 0) {
           return {
@@ -931,8 +986,8 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           };
         }
 
-        const maxWaitMs = 10_000;
-        const pollIntervalMs = 2_000;
+        const maxWaitMs = (maxWaitSeconds ?? 10) * 1000;
+        const pollIntervalMs = (pollInterval ?? 2) * 1000;
         const shouldWait = waitForIndexing !== false;
         const startTime = Date.now();
         let lastResult: any = null;
