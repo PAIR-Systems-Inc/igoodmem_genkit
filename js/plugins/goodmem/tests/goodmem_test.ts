@@ -17,7 +17,7 @@
 import * as assert from 'assert';
 import { genkit } from 'genkit';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
-import { goodmem, listSpaces, listEmbedders } from '../src/index.js';
+import { goodmem, listEmbedders, listSpaces } from '../src/index.js';
 
 // ---------------------------------------------------------------------------
 // Mock helpers
@@ -161,8 +161,7 @@ describe('GoodMem Plugin', () => {
         { spaceId: 'sp-1', name: 'test-space' },
         { spaceId: 'sp-2', name: 'another-space' },
       ];
-      globalThis.fetch = async () =>
-        mockResponse({ spaces: mockSpaces });
+      globalThis.fetch = async () => mockResponse({ spaces: mockSpaces });
 
       const result = await listSpaces({
         baseUrl: 'http://localhost:8080',
@@ -204,11 +203,8 @@ describe('GoodMem Plugin', () => {
 
   describe('listEmbedders', () => {
     it('should return embedders array from response', async () => {
-      const mockEmbedders = [
-        { embedderId: 'emb-1', name: 'text-embedding' },
-      ];
-      globalThis.fetch = async () =>
-        mockResponse({ embedders: mockEmbedders });
+      const mockEmbedders = [{ embedderId: 'emb-1', name: 'text-embedding' }];
+      globalThis.fetch = async () => mockResponse({ embedders: mockEmbedders });
 
       const result = await listEmbedders({
         baseUrl: 'http://localhost:8080',
@@ -230,7 +226,7 @@ describe('GoodMem Plugin', () => {
         callCount++;
         const urlStr = typeof url === 'string' ? url : url.toString();
         if (urlStr.endsWith('/v1/spaces') && callCount === 1) {
-          // listSpaces call — no matching space
+          // listSpaces call: no matching space
           return mockResponse({ spaces: [] });
         }
         // POST to create space
@@ -265,9 +261,7 @@ describe('GoodMem Plugin', () => {
     it('should reuse an existing space with the same name', async () => {
       globalThis.fetch = async () =>
         mockResponse({
-          spaces: [
-            { spaceId: 'existing-id', name: 'test-space' },
-          ],
+          spaces: [{ spaceId: 'existing-id', name: 'test-space' }],
         });
 
       const ai = genkit({
@@ -380,10 +374,7 @@ describe('GoodMem Plugin', () => {
 
       assert.strictEqual(result.success, false);
       assert.ok(result.error);
-      assert.match(
-        result.error,
-        /No content provided/
-      );
+      assert.match(result.error, /No content provided/);
     });
 
     it('should fail gracefully when file is not found', async () => {
@@ -483,7 +474,10 @@ describe('GoodMem Plugin', () => {
 
       assert.strictEqual(result.success, true);
       assert.strictEqual(result.totalResults, 1);
-      assert.strictEqual(result.results[0].chunkText, 'Paris is the capital of France');
+      assert.strictEqual(
+        result.results[0].chunkText,
+        'Paris is the capital of France'
+      );
       assert.strictEqual(result.results[0].relevanceScore, 0.95);
       assert.strictEqual(result.memories.length, 1);
       assert.strictEqual(result.resultSetId, 'rs-1');
@@ -750,10 +744,7 @@ describe('GoodMem Plugin', () => {
       });
 
       assert.strictEqual(capturedHeaders['X-API-Key'], 'gm_test_api_key');
-      assert.strictEqual(
-        capturedHeaders['Content-Type'],
-        'application/json'
-      );
+      assert.strictEqual(capturedHeaders['Content-Type'], 'application/json');
       assert.strictEqual(capturedHeaders['Accept'], 'application/json');
     });
   });
@@ -773,10 +764,7 @@ describe('GoodMem Plugin', () => {
         apiKey: 'test-key',
       });
 
-      assert.strictEqual(
-        capturedUrl,
-        'http://localhost:8080/v1/spaces'
-      );
+      assert.strictEqual(capturedUrl, 'http://localhost:8080/v1/spaces');
     });
   });
 });

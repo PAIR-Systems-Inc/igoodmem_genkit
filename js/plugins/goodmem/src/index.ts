@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
+import * as fs from 'fs';
 import { z, type Genkit } from 'genkit';
 import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
-import * as fs from 'fs';
 import * as path from 'path';
 
 // ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ export async function listEmbedders(params: GoodMemPluginParams) {
 }
 
 // ---------------------------------------------------------------------------
-// Zod schemas — Spaces
+// Zod schemas: spaces
 // ---------------------------------------------------------------------------
 
 const ListEmbeddersInputSchema = z.object({}).optional();
@@ -194,7 +194,9 @@ const CreateSpaceInputSchema = z.object({
   labels: z
     .record(z.string())
     .optional()
-    .describe('Optional key-value labels attached to the space at creation time.'),
+    .describe(
+      'Optional key-value labels attached to the space at creation time.'
+    ),
 });
 
 const CreateSpaceOutputSchema = z.object({
@@ -210,10 +212,7 @@ const CreateSpaceOutputSchema = z.object({
 
 const UpdateSpaceInputSchema = z.object({
   spaceId: z.string().describe('The UUID of the space to update.'),
-  name: z
-    .string()
-    .optional()
-    .describe('New name for the space.'),
+  name: z.string().optional().describe('New name for the space.'),
   publicRead: z
     .boolean()
     .optional()
@@ -258,7 +257,7 @@ const DeleteSpaceOutputSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// Zod schemas — Memories
+// Zod schemas: memories
 // ---------------------------------------------------------------------------
 
 const CreateMemoryInputSchema = z.object({
@@ -284,7 +283,9 @@ const CreateMemoryInputSchema = z.object({
   author: z
     .string()
     .optional()
-    .describe('The author or creator of the content. Stored in metadata.author.'),
+    .describe(
+      'The author or creator of the content. Stored in metadata.author.'
+    ),
   tags: z
     .string()
     .optional()
@@ -437,7 +438,8 @@ const DeleteMemoryOutputSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /**
- * GoodMem plugin for Genkit.
+ * Genkit plugin for GoodMem, the retrieval-augmented generation (RAG)
+ * memory backend for AI agents.
  *
  * Registers 11 GoodMem tools that can be used with any Genkit agent or flow:
  * list_embedders, list_spaces, get_space, create_space, update_space,
@@ -661,7 +663,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           return {
             success: false,
             error:
-              'replaceLabels and mergeLabels are mutually exclusive — pass only one.',
+              'replaceLabels and mergeLabels are mutually exclusive. Pass only one.',
           };
         }
 
@@ -747,7 +749,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
       {
         name: 'goodmem/create_memory',
         description:
-          'Store a document as a new memory in a GoodMem space. The memory is processed asynchronously — chunked into searchable pieces and embedded into vectors. Accepts a file path or plain text.',
+          'Store a document as a new memory in a GoodMem space. The memory is processed asynchronously, chunked into searchable pieces, and embedded into vectors. Accepts a file path or plain text.',
         inputSchema: CreateMemoryInputSchema,
         outputSchema: CreateMemoryOutputSchema,
       },
@@ -797,7 +799,6 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           };
         }
 
-        // Merge metadata (matches Activepieces reference behavior).
         const mergedMetadata: Record<string, any> = {};
         if (metadata && typeof metadata === 'object') {
           Object.assign(mergedMetadata, metadata);
@@ -815,11 +816,10 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
         }
 
         try {
-          const response = await apiJson(
-            `${baseUrl}/v1/memories`,
-            apiKey,
-            { method: 'POST', body: JSON.stringify(requestBody) }
-          );
+          const response = await apiJson(`${baseUrl}/v1/memories`, apiKey, {
+            method: 'POST',
+            body: JSON.stringify(requestBody),
+          });
           return {
             success: true,
             memoryId: response.memoryId,
@@ -855,9 +855,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
             `${baseUrl}/v1/spaces/${spaceId}/memories`,
             apiKey
           );
-          const memories = Array.isArray(body)
-            ? body
-            : body?.memories || [];
+          const memories = Array.isArray(body) ? body : body?.memories || [];
           return {
             success: true,
             spaceId,
@@ -915,15 +913,11 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           fetchMemory: includeMemoryDefinition !== false,
         };
 
-        // Post-processor config (reranker / LLM) — mirrors Activepieces reference.
         if (rerankerId || llmId) {
           const config: any = {};
           if (rerankerId) config.reranker_id = rerankerId;
           if (llmId) config.llm_id = llmId;
-          if (
-            relevanceThreshold !== undefined &&
-            relevanceThreshold !== null
-          )
+          if (relevanceThreshold !== undefined && relevanceThreshold !== null)
             config.relevance_threshold = relevanceThreshold;
           if (llmTemperature !== undefined && llmTemperature !== null)
             config.llm_temp = llmTemperature;
@@ -1028,9 +1022,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
               };
             }
 
-            await new Promise((resolve) =>
-              setTimeout(resolve, pollIntervalMs)
-            );
+            await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
           } while (true);
         } catch (error: any) {
           return {
