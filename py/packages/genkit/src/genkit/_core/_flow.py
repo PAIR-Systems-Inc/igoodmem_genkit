@@ -67,13 +67,13 @@ def define_flow(
     """Register an async function as a flow action."""
     # All Python functions have __name__, but ty is strict about Callable protocol
     if not inspect.iscoroutinefunction(func):
-        raise TypeError(f'Flow must be async: {func.__name__}')  # ty: ignore[unresolved-attribute]
+        raise TypeError(f'Flow must be async: {getattr(func, "__name__", repr(func))}')
 
-    flow_name = name or func.__name__  # ty: ignore[unresolved-attribute]
+    flow_name = name or getattr(func, '__name__', None) or 'unnamed_flow'
     return registry.register_action(
         name=flow_name,
         kind=ActionKind.FLOW,
         fn=func,
         description=get_func_description(func, description),
-        span_metadata={'genkit:metadata:flow:name': flow_name},
+        span_metadata={'flow:name': flow_name},
     )

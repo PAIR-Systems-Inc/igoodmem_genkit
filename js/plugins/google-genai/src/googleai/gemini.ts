@@ -28,7 +28,6 @@ import {
 } from 'genkit/model';
 import { downloadRequestMedia } from 'genkit/model/middleware';
 import { model as pluginModel } from 'genkit/plugin';
-import { runInNewSpan } from 'genkit/tracing';
 import {
   fromGeminiCandidate,
   toGeminiFunctionModeEnum,
@@ -36,11 +35,8 @@ import {
   toGeminiSystemInstruction,
   toGeminiTool,
 } from '../common/converters.js';
-import {
-  generateContent,
-  generateContentStream,
-  getGoogleAIUrl,
-} from './client.js';
+import { isKnownKey } from '../common/utils.js';
+import { generateContent, generateContentStream } from './client.js';
 import {
   ClientOptions,
   Content as GeminiMessage,
@@ -262,6 +258,10 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
       GenerationCommonConfigDescriptions.topP + ' The default value is 0.95.'
     )
     .optional(),
+  serviceTier: z
+    .union([z.enum(['standard', 'flex', 'priority']), z.string()])
+    .describe('Service tier for the Gemini API.')
+    .optional(),
   thinkingConfig: z
     .object({
       includeThoughts: z
@@ -353,7 +353,19 @@ export const GeminiImageConfigSchema = GeminiConfigSchema.extend({
           '21:9',
         ])
         .optional(),
-      imageSize: z.enum(['0.5K', '1K', '2K', '4K']).optional(),
+      imageSize: z
+        .enum([
+          '256',
+          '256P',
+          '256PX',
+          '512',
+          '512P',
+          '512PX',
+          '1K',
+          '2K',
+          '4K',
+        ])
+        .optional(),
     })
     .passthrough()
     .optional(),
@@ -458,6 +470,8 @@ const KNOWN_GEMINI_MODELS = {
   'gemini-pro-latest': commonRef('gemini-pro-latest'),
   'gemini-flash-latest': commonRef('gemini-flash-latest'),
   'gemini-flash-lite-latest': commonRef('gemini-flash-lite-latest'),
+  'gemini-3.5-flash': commonRef('gemini-3.5-flash'),
+  'gemini-3.1-flash-lite': commonRef('gemini-3.1-flash-lite'),
   'gemini-3.1-flash-lite-preview': commonRef('gemini-3.1-flash-lite-preview'),
   'gemini-3.1-pro-preview-customtools': commonRef(
     'gemini-3.1-pro-preview-customtools'
@@ -473,8 +487,8 @@ export type GeminiModelName = `gemini-${string}`;
 export function isGeminiModelName(value: string): value is GeminiModelName {
   return (
     value.startsWith('gemini-') &&
-    !value.endsWith('-tts') &&
-    !value.includes('-image')
+    !isTTSModelName(value) &&
+    !isImageModelName(value)
   );
 }
 
@@ -489,11 +503,16 @@ const KNOWN_TTS_MODELS = {
     { ...GENERIC_TTS_MODEL.info },
     GeminiTtsConfigSchema
   ),
+  'gemini-3.1-flash-tts-preview': commonRef(
+    'gemini-3.1-flash-tts-preview',
+    { ...GENERIC_TTS_MODEL.info },
+    GeminiTtsConfigSchema
+  ),
 };
 export type KnownTtsModels = keyof typeof KNOWN_TTS_MODELS;
-export type TTSModelName = `gemini-${string}-tts`;
+export type TTSModelName = `gemini-${string}-tts${string}`;
 export function isTTSModelName(value: string): value is TTSModelName {
-  return value.startsWith('gemini-') && value.endsWith('-tts');
+  return value.startsWith('gemini-') && value.includes('-tts');
 }
 
 const KNOWN_IMAGE_MODELS = {
@@ -520,11 +539,12 @@ export function isImageModelName(value: string): value is ImageModelName {
 }
 
 const KNOWN_GEMMA_MODELS = {
-  'gemma-3-12b-it': commonRef('gemma-3-12b-it', undefined, GemmaConfigSchema),
-  'gemma-3-1b-it': commonRef('gemma-3-1b-it', undefined, GemmaConfigSchema),
-  'gemma-3-27b-it': commonRef('gemma-3-27b-it', undefined, GemmaConfigSchema),
-  'gemma-3-4b-it': commonRef('gemma-3-4b-it', undefined, GemmaConfigSchema),
-  'gemma-3n-e4b-it': commonRef('gemma-3n-e4b-it', undefined, GemmaConfigSchema),
+  'gemma-4-26b-a4b-it': commonRef(
+    'gemma-4-26b-a4b-it',
+    undefined,
+    GemmaConfigSchema
+  ),
+  'gemma-4-31b-it': commonRef('gemma-4-31b-it', undefined, GemmaConfigSchema),
 } as const;
 export type KnownGemmaModels = keyof typeof KNOWN_GEMMA_MODELS;
 export type GemmaModelName = `gemma-${string}`;
@@ -544,6 +564,10 @@ export function model(
   config: ConfigSchema = {}
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
+    return KNOWN_MODELS[name].withConfig(config);
+  }
 
   if (isTTSModelName(name)) {
     return modelRef({
@@ -618,6 +642,7 @@ export function defineModel(
     apiVersion: pluginOptions?.apiVersion,
     baseUrl: pluginOptions?.baseUrl,
     customHeaders: pluginOptions?.customHeaders,
+    experimental_debugTraces: pluginOptions?.experimental_debugTraces,
   };
 
   const middleware: ModelMiddleware[] = [];
@@ -672,9 +697,21 @@ export function defineModel(
         request.config
       );
 
+      const modelVersion = request.config?.version || extractVersion(ref);
+      const isGemma = isGemmaModelName(modelVersion);
+
       // Make a copy so that modifying the request will not produce side-effects
-      const messages = [...request.messages];
+      const messages = request.messages.map((m) => ({ ...m }));
       if (messages.length === 0) throw new Error('No messages provided.');
+
+      if (isGemma) {
+        // Gemma does not allow previous thoughts
+        messages.forEach((m) => {
+          m.content = m.content.filter(
+            (p) => !p.reasoning && !p.metadata?.thoughtSignature
+          );
+        });
+      }
 
       // Gemini does not support messages with role system and instead expects
       // systemInstructions to be provided as a separate input. The first
@@ -696,6 +733,7 @@ export function defineModel(
       const requestOptions: ConfigSchema = {
         ...request.config,
       };
+
       const {
         apiKey: apiKeyFromConfig,
         safetySettings: safetySettingsFromConfig,
@@ -710,6 +748,7 @@ export function defineModel(
         urlContext,
         tools: toolsFromConfig,
         retrievalConfig,
+        serviceTier,
         ...restOfConfigOptions
       } = requestOptions;
 
@@ -802,6 +841,16 @@ export function defineModel(
         responseMimeType: jsonMode ? 'application/json' : undefined,
       };
 
+      if (isTTSModelName(modelVersion)) {
+        if (!generationConfig.responseModalities) {
+          generationConfig.responseModalities = ['AUDIO'];
+        }
+      } else if (isImageModelName(modelVersion)) {
+        if (!generationConfig.responseModalities) {
+          generationConfig.responseModalities = ['TEXT', 'IMAGE'];
+        }
+      }
+
       if (request.output?.constrained && jsonMode) {
         if (pluginOptions?.legacyResponseSchema) {
           generationConfig.responseSchema = cleanSchema(request.output.schema);
@@ -809,8 +858,6 @@ export function defineModel(
           generationConfig.responseJsonSchema = request.output.schema;
         }
       }
-
-      const msg = toGeminiMessage(messages[messages.length - 1], ref);
 
       let generateContentRequest: GenerateContentRequest = {
         systemInstruction,
@@ -821,102 +868,69 @@ export function defineModel(
           (setting) => setting.category !== 'HARM_CATEGORY_UNSPECIFIED'
         ) as SafetySetting[],
         contents: messages.map((message) => toGeminiMessage(message, ref)),
+        serviceTier,
       };
-
-      const modelVersion = versionFromConfig || extractVersion(ref);
 
       const generateApiKey = calculateApiKey(
         pluginOptions?.apiKey,
         requestOptions.apiKey
       );
 
-      const callGemini = async () => {
-        let response: GenerateContentResponse;
+      let response: GenerateContentResponse;
 
-        if (streamingRequested) {
-          const result = await generateContentStream(
-            generateApiKey,
-            modelVersion,
-            generateContentRequest,
-            clientOpt
-          );
-          const chunks: CandidateData[] = [];
-          for await (const item of result.stream) {
-            item.candidates?.forEach((candidate) => {
-              const c = fromGeminiCandidate(candidate, chunks);
-              chunks.push(c);
-              sendChunk({
-                index: c.index,
-                content: c.message.content,
-              });
+      if (streamingRequested) {
+        const result = await generateContentStream(
+          generateApiKey,
+          modelVersion,
+          generateContentRequest,
+          clientOpt
+        );
+        const chunks: CandidateData[] = [];
+        for await (const item of result.stream) {
+          item.candidates?.forEach((candidate) => {
+            const c = fromGeminiCandidate(candidate, chunks);
+            chunks.push(c);
+            sendChunk({
+              index: c.index,
+              content: c.message.content,
             });
-          }
-          response = await result.response;
-        } else {
-          response = await generateContent(
-            generateApiKey,
-            modelVersion,
-            generateContentRequest,
-            clientOpt
-          );
-        }
-
-        const candidates = response.candidates || [];
-        if (response.candidates?.['undefined']) {
-          candidates.push(response.candidates['undefined']);
-        }
-        if (!candidates.length) {
-          throw new GenkitError({
-            status: 'FAILED_PRECONDITION',
-            message: 'No valid candidates returned.',
           });
         }
+        response = await result.response;
+      } else {
+        response = await generateContent(
+          generateApiKey,
+          modelVersion,
+          generateContentRequest,
+          clientOpt
+        );
+      }
 
-        const candidateData =
-          candidates.map((c) => fromGeminiCandidate(c)) || [];
+      const candidates = response.candidates || [];
+      if (response.candidates?.['undefined']) {
+        candidates.push(response.candidates['undefined']);
+      }
+      if (!candidates.length) {
+        throw new GenkitError({
+          status: 'FAILED_PRECONDITION',
+          message: 'No valid candidates returned.',
+        });
+      }
 
-        return {
-          candidates: candidateData,
-          custom: response,
-          usage: {
-            ...getBasicUsageStats(request.messages, candidateData),
-            inputTokens: response.usageMetadata?.promptTokenCount,
-            outputTokens: response.usageMetadata?.candidatesTokenCount,
-            thoughtsTokens: response.usageMetadata?.thoughtsTokenCount,
-            totalTokens: response.usageMetadata?.totalTokenCount,
-            cachedContentTokens:
-              response.usageMetadata?.cachedContentTokenCount,
-          },
-        };
+      const candidateData = candidates.map((c) => fromGeminiCandidate(c)) || [];
+
+      return {
+        candidates: candidateData,
+        custom: response,
+        usage: {
+          ...getBasicUsageStats(request.messages, candidateData),
+          inputTokens: response.usageMetadata?.promptTokenCount,
+          outputTokens: response.usageMetadata?.candidatesTokenCount,
+          thoughtsTokens: response.usageMetadata?.thoughtsTokenCount,
+          totalTokens: response.usageMetadata?.totalTokenCount,
+          cachedContentTokens: response.usageMetadata?.cachedContentTokenCount,
+        },
       };
-
-      // If debugTraces is enabled, we wrap the actual model call with a span, add raw
-      // API params as for input.
-      return pluginOptions?.experimental_debugTraces
-        ? await runInNewSpan(
-            {
-              metadata: {
-                name: streamingRequested ? 'sendMessageStream' : 'sendMessage',
-              },
-            },
-            async (metadata) => {
-              metadata.input = {
-                apiEndpoint: getGoogleAIUrl({
-                  resourcePath: '',
-                  clientOptions: clientOpt,
-                }),
-                cache: {},
-                model: modelVersion,
-                generateContentOptions: generateContentRequest,
-                parts: msg.parts,
-                options: clientOpt,
-              };
-              const response = await callGemini();
-              metadata.output = response.custom;
-              return response;
-            }
-          )
-        : await callGemini();
     }
   );
 }

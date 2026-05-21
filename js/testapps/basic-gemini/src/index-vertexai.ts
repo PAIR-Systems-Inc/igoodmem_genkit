@@ -30,11 +30,24 @@ const ai = genkit({
 // Basic Hi
 ai.defineFlow('basic-hi', async () => {
   const { text } = await ai.generate({
-    model: vertexAI.model('gemini-2.5-flash'),
+    model: vertexAI.model('gemini-3.5-flash'),
     prompt: 'You are a helpful AI assistant named Walt, say hello',
   });
 
   return text;
+});
+
+// Flex/Priority PayGo
+ai.defineFlow('paygo', async () => {
+  const response = await ai.generate({
+    model: vertexAI.model('gemini-3.1-flash-lite-preview'),
+    prompt: 'You are a helpful AI assistant named Walt, say hello.',
+    config: {
+      payGo: 'priority', // or priority-only, flex, flex-only.
+    },
+  });
+
+  return response;
 });
 
 // Gemini 3.1 thinkingLevel config
@@ -442,9 +455,6 @@ ai.defineFlow('gemini-image-editing', async (_) => {
       { media: { url: `data:image/png;base64,${plant}` } },
       { media: { url: `data:image/png;base64,${room}` } },
     ],
-    config: {
-      responseModalities: ['TEXT', 'IMAGE'],
-    },
   });
 
   return media;
@@ -456,7 +466,6 @@ ai.defineFlow('nano-banana-pro', async (_) => {
     model: vertexAI.model('gemini-3-pro-image-preview'),
     prompt: 'Generate a picture of a sunset in the mountains by a lake',
     config: {
-      responseModalities: ['TEXT', 'IMAGE'],
       imageConfig: {
         aspectRatio: '21:9',
         imageSize: '4K',
@@ -473,10 +482,9 @@ ai.defineFlow('nano-banana-2', async (_) => {
     prompt:
       'Generate an image of the CN Tower. Use words to show the current date, time and weather on the image.',
     config: {
-      responseModalities: ['TEXT', 'IMAGE'],
       imageConfig: {
         aspectRatio: '3:4',
-        imageSize: '2K',
+        imageSize: '512',
       },
     },
   });
@@ -549,7 +557,7 @@ ai.defineFlow('imagen-try-on', async (_) => {
 
 ai.defineFlow('veo-text-prompt', async (_, { sendChunk }) => {
   let { operation } = await ai.generate({
-    model: vertexAI.model('veo-3.0-generate-001'),
+    model: vertexAI.model('veo-3.1-lite-generate-001'),
     prompt: [
       {
         text: 'slowly flying over a meadow in full bloom',
@@ -688,6 +696,16 @@ ai.defineFlow('lyria-music-generation', async (_) => {
   return {
     media: 'data:audio/wav;base64,' + (await toWav(audioBuffer, 2, 48000)),
   };
+});
+
+ai.defineFlow('lyria3-music-generation', async () => {
+  const response = await ai.generate({
+    model: vertexAI.model('lyria-3-clip-preview'),
+    prompt:
+      'Create a 30-second cheerful acoustic folk song with guitar and harmonica.',
+  });
+
+  return response;
 });
 
 // Tuned model. Replace the 12345 with your ENDPOINT ID

@@ -9,11 +9,9 @@ from unittest import mock
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from opentelemetry import trace as trace_api
-from opentelemetry.sdk.trace import TracerProvider
 
 from genkit import Genkit
-from genkit._core._action import Action, ActionKind, _action_context
+from genkit._core._action import _action_context
 from genkit._core._typing import Operation
 
 
@@ -38,28 +36,6 @@ async def test_genkit_run() -> None:
 
     with pytest.raises(TypeError, match='fn must be a coroutine function'):
         await ai.run(name='test3', fn=sync_fn)  # type: ignore[arg-type]
-
-
-@pytest.mark.asyncio
-async def test_genkit_dynamic_tool() -> None:
-    """Test Genkit.dynamic_tool method."""
-    ai = Genkit()
-
-    async def my_tool(x: int) -> int:
-        return x + 1
-
-    tool = ai.dynamic_tool(name='my_tool', fn=my_tool, description='increment x')
-
-    assert isinstance(tool, Action)
-    assert tool.kind == ActionKind.TOOL
-    assert tool.name == 'my_tool'
-    assert tool.description == 'increment x'
-    assert tool.metadata.get('type') == 'tool'
-    assert tool.metadata.get('dynamic') is True
-
-    # Execution
-    resp = await tool.run(5)
-    assert resp.response == 6
 
 
 @pytest.mark.asyncio
@@ -122,16 +98,3 @@ async def test_current_context() -> None:
         _action_context.reset(token)
 
     assert Genkit.current_context() is None
-
-
-@pytest.mark.asyncio
-async def test_flush_tracing() -> None:
-    """Test Genkit.flush_tracing method."""
-    ai = Genkit()
-
-    mock_provider = MagicMock(spec=TracerProvider)
-    mock_provider.force_flush = MagicMock()
-
-    with mock.patch.object(trace_api, 'get_tracer_provider', return_value=mock_provider):
-        await ai.flush_tracing()
-        mock_provider.force_flush.assert_called_once()

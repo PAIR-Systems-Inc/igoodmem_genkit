@@ -113,11 +113,14 @@ func cloneToolWithoutFunctions(t *genai.Tool) *genai.Tool {
 }
 
 // toGeminiToolChoice translates tool choice settings to Gemini tool config.
-func toGeminiToolChoice(toolChoice ai.ToolChoice, tools []*ai.ToolDefinition) (*genai.ToolConfig, error) {
+func toGeminiToolChoice(toolConfig *genai.ToolConfig, toolChoice ai.ToolChoice, tools []*ai.ToolDefinition) (*genai.ToolConfig, error) {
 	var mode genai.FunctionCallingConfigMode
 	switch toolChoice {
 	case "":
-		return nil, nil
+		// No ToolChoice was set; leave whatever ToolConfig the user supplied
+		// via config alone so RetrievalConfig and IncludeServerSideToolInvocations
+		// survive instead of being clobbered to nil.
+		return toolConfig, nil
 	case ai.ToolChoiceAuto:
 		mode = genai.FunctionCallingConfigModeAuto
 	case ai.ToolChoiceRequired:
@@ -135,6 +138,16 @@ func toGeminiToolChoice(toolChoice ai.ToolChoice, tools []*ai.ToolDefinition) (*
 			toolNames = append(toolNames, t.Name)
 		}
 	}
+
+	// If a config already exists, just add as a parameter
+	if toolConfig != nil {
+		toolConfig.FunctionCallingConfig = &genai.FunctionCallingConfig{
+			Mode:                 mode,
+			AllowedFunctionNames: toolNames,
+		}
+		return toolConfig, nil
+	}
+
 	return &genai.ToolConfig{
 		FunctionCallingConfig: &genai.FunctionCallingConfig{
 			Mode:                 mode,
